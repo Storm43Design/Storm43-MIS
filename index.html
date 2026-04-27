@@ -344,8 +344,8 @@ textarea{resize:vertical;min-height:80px}
       <div class="topbar-left">
         <div class="topbar-title" id="page-title">Dashboard</div>
       </div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <span id="sync-status" style="font-size:11px;font-family:var(--mono);color:var(--brand);transition:all 0.3s"></span>
+      <div style="display:flex;align-items:center;gap:14px">
+        <span id="sync-status" style="font-size:11px;font-family:var(--mono);transition:all 0.3s;min-width:120px;text-align:right"></span>
         <div id="topbar-actions" style="display:flex;gap:8px"></div>
       </div>
     </div>
@@ -380,81 +380,95 @@ const KANBAN_COLORS = {
 };
 
 // ════════════════════════════════════════════════════════════
-// DATABASE LAYER — Google Sheets
+// DATABASE LAYER — Google Sheets (cloud, shared across all devices)
 // ════════════════════════════════════════════════════════════
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbxMWtzHSaPW-YWCZoGqWQXOOaeltx_O145ZdejajF7jlfaRzgsvywrbRwBewokNbOzGsQ/exec";
-const USE_CLOUD = true;
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbxMWtzHSaPW-YWCZoGqWQXOOaeltx_O145ZdejajF7jlfaRzgsvywrbRwBewokNbOzGsQ/exec';
 
 const DB = {
-  _cache: null,
-  _saving: false,
-  _dirty: false,
   _saveTimer: null,
 
-  async load(){
-    // Try cloud first, fall back to localStorage
+  async load() {
+    // Show loading indicator
+    setSyncStatus('loading');
+    
+    // Try Google Sheets first
     try {
-      const url = SHEETS_URL + '?action=read&t=' + Date.now();
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if(data && !data.error){
-        // Merge: cloud is source of truth
-        localStorage.setItem('storm43_v4_cache', JSON.stringify(data));
-        return data;
+      const url = SHEETS_URL + '?action=read&cb=' + Date.now();
+      const resp = await fetch(url, { method: 'GET' });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && !data.error && (data.jobs || data.clients)) {
+          // Success — cache locally and return
+          try { localStorage.setItem('storm43_backup', JSON.stringify(data)); } catch(e) {}
+          setSyncStatus('synced');
+          return data;
+        }
       }
     } catch(e) {
-      console.warn('Cloud load failed, using cache:', e);
+      console.warn('Google Sheets load failed:', e.message);
     }
-    // Fallback to local cache
-    try{
-      const d = localStorage.getItem('storm43_v4_cache');
-      if(d) return JSON.parse(d);
-    }catch(e){}
+
+    // Fallback: use local backup cache
+    try {
+      const cached = localStorage.getItem('storm43_backup');
+      if (cached) {
+        const data = JSON.parse(cached);
+        setSyncStatus('offline');
+        return data;
+      }
+    } catch(e) {}
+
+    setSyncStatus('new');
     return null;
   },
 
-  async save(data){
-    // Always save to local cache immediately
-    try{localStorage.setItem('storm43_v4_cache', JSON.stringify(data));}catch(e){}
-    // Debounce cloud saves — wait 1.5s after last change
+  async save(data) {
+    // 1. Always cache locally immediately so nothing is ever lost
+    try { localStorage.setItem('storm43_backup', JSON.stringify(data)); } catch(e) {}
+    
+    // 2. Debounce — push to Google Sheets 2 seconds after last change
     clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(()=>this._pushToCloud(data), 1500);
+    this._saveTimer = setTimeout(() => this._cloudSave(data), 2000);
   },
 
-  async _pushToCloud(data){
-    // Strip large base64 images to keep payload small — store refs only
-    const payload = JSON.parse(JSON.stringify(data));
-    // Keep dataUrls but truncate for sheet storage if huge
+  async _cloudSave(data) {
+    setSyncStatus('saving');
     try {
       const resp = await fetch(SHEETS_URL, {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(data)
       });
-      const result = await resp.json();
-      if(result.error){
-        console.error('Cloud save error:', result.error);
-        showSyncStatus('error');
-      } else {
-        showSyncStatus('saved');
+      if (resp.ok) {
+        const result = await resp.json();
+        if (result.success) {
+          setSyncStatus('synced');
+          return;
+        }
       }
+      setSyncStatus('offline');
     } catch(e) {
-      console.warn('Cloud save failed:', e);
-      showSyncStatus('offline');
+      console.warn('Cloud save failed:', e.message);
+      setSyncStatus('offline');
     }
   }
 };
 
-function showSyncStatus(status){
+function setSyncStatus(status) {
   const el = document.getElementById('sync-status');
-  if(!el) return;
-  if(status === 'saved'){
-    el.textContent = '☁ Synced';
-    el.style.color = 'var(--brand)';
-  } else if(status === 'error' || status === 'offline'){
-    el.textContent = '⚠ Offline — saved locally';
-    el.style.color = 'var(--amber)';
+  if (!el) return;
+  const map = {
+    loading:  { text: '⟳ Connecting...', color: 'var(--muted)' },
+    saving:   { text: '↑ Saving...',      color: 'var(--muted)' },
+    synced:   { text: '☁ Synced',         color: 'var(--brand)' },
+    offline:  { text: '⚠ Offline (local cache)', color: 'var(--amber)' },
+    new:      { text: '☁ New database',   color: 'var(--blue)' },
+  };
+  const s = map[status] || { text: '', color: '' };
+  el.textContent = s.text;
+  el.style.color = s.color;
+  if (status === 'synced') {
+    setTimeout(() => { if (el) el.textContent = ''; }, 3000);
   }
-  setTimeout(()=>{if(el)el.textContent='';},4000);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -479,21 +493,24 @@ let state = {
   jobCounter:1,view:'dashboard',currentUser:null
 };
 
-async function saveState(){
-  const el = document.getElementById('sync-status');
-  if(el){el.textContent='↑ Saving...';el.style.color='var(--muted)';}
+async function saveState() {
   await DB.save(state);
 }
-async function initState(){
+async function initState() {
   const saved = await DB.load();
-  if(saved){
+  if (saved) {
     state = saved;
-    if(!state.users||!state.users.length)state.users=[...DEFAULT_USERS];
-    if(!state.sections)state.sections=[...DEFAULT_SECTIONS];
-    if(!state.designFiles)state.designFiles=[];
-    ['clients','tasks','timeEntries','costItems'].forEach(k=>{if(!state[k])state[k]=[];});
-    if(!state.jobCounter)state.jobCounter=1;
   }
+  // Always ensure required fields exist with defaults
+  if (!state.users || !state.users.length) state.users = [...DEFAULT_USERS];
+  if (!state.sections || !state.sections.length) state.sections = [...DEFAULT_SECTIONS];
+  if (!state.designFiles) state.designFiles = [];
+  if (!state.jobs) state.jobs = [];
+  if (!state.clients) state.clients = [];
+  if (!state.tasks) state.tasks = [];
+  if (!state.timeEntries) state.timeEntries = [];
+  if (!state.costItems) state.costItems = [];
+  if (!state.jobCounter || state.jobCounter < 1) state.jobCounter = 1;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1674,7 +1691,28 @@ function addSection(){
   state.sections.push({id:'s_'+Date.now(),label:name,key,enabled:true,custom:true});
   saveState();render();
 }
-// Supabase config removed — using Google Sheets
+async function testConnection() {
+  const el = document.getElementById('connection-test-result');
+  if (el) { el.textContent = '⟳ Testing...'; el.style.color = 'var(--muted)'; }
+  try {
+    const url = SHEETS_URL + '?action=read&cb=' + Date.now();
+    const resp = await fetch(url);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && !data.error) {
+        if (el) { el.textContent = '✓ Connected — Google Sheets responding correctly'; el.style.color = 'var(--brand-dark)'; }
+        toast('Connection successful!', 'success');
+      } else {
+        if (el) { el.textContent = '✗ Error: ' + (data.error || 'Unknown response'); el.style.color = 'var(--red)'; }
+      }
+    } else {
+      if (el) { el.textContent = '✗ HTTP Error ' + resp.status; el.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (el) { el.textContent = '✗ Cannot reach Google Sheets: ' + e.message; el.style.color = 'var(--red)'; }
+    toast('Connection failed — check your script deployment', 'error');
+  }
+}
 
 // ════════════════════════════════════════════════════════════
 // JOB TICKET
@@ -2038,61 +2076,69 @@ function deleteUser(id){
 // ════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════
-function forceSyncNow(){
-  const el=document.getElementById('sync-status');
-  if(el){el.textContent='↑ Syncing...';el.style.color='var(--muted)';}
-  DB._pushToCloud(state);
-  toast('Sync initiated','success');
+function forceSyncNow() {
+  DB._cloudSave(state);
+  toast('Syncing to Google Sheets...', 'success');
 }
 
-function exportLocalBackup(){
-  const data = JSON.stringify(state, null, 2);
-  const blob = new Blob([data], {type:'application/json'});
+function exportLocalBackup() {
+  const clean = JSON.parse(JSON.stringify(state));
+  // Remove large base64 data from backup to keep it manageable
+  const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'Storm43_MIS_Backup_' + new Date().toISOString().split('T')[0] + '.json';
+  a.download = 'Storm43_Backup_' + new Date().toISOString().split('T')[0] + '.json';
   a.click();
   toast('Backup downloaded');
 }
 
-async function init(){
-  // Show loading on login screen
-  document.getElementById('login-logo').src=LOGO_SRC;
-  document.getElementById('sidebar-logo').src=LOGO_SRC;
-  document.getElementById('login-err').textContent='Connecting to database...';
-  document.getElementById('login-err').style.color='rgba(255,255,255,0.4)';
-  
+async function init() {
+  document.getElementById('login-logo').src = LOGO_SRC;
+  document.getElementById('sidebar-logo').src = LOGO_SRC;
+
+  // Show connecting message on login screen
+  const errEl = document.getElementById('login-err');
+  errEl.style.color = 'rgba(255,255,255,0.45)';
+  errEl.textContent = '⟳ Connecting to database...';
+
   await initState();
-  
-  document.getElementById('login-err').textContent='';
-  document.getElementById('login-screen').style.display='flex';
-  
-  // Poll for updates every 30 seconds when logged in
-  setInterval(async ()=>{
-    if(!state.currentUser) return;
-    try{
-      const url = SHEETS_URL + '?action=read&t=' + Date.now();
+
+  errEl.textContent = '';
+  document.getElementById('login-screen').style.display = 'flex';
+
+  // Live sync polling — every 30 seconds pull fresh data from Google Sheets
+  setInterval(async () => {
+    if (!state.currentUser) return;
+    try {
+      const url = SHEETS_URL + '?action=read&cb=' + Date.now();
       const resp = await fetch(url);
+      if (!resp.ok) return;
       const fresh = await resp.json();
-      if(fresh && !fresh.error && fresh.jobs){
-        // Merge remote data — remote wins for shared collections
-        ['jobs','clients','tasks','timeEntries','costItems','users','sections'].forEach(k=>{
-          if(fresh[k] !== undefined) state[k] = fresh[k];
-        });
-        // Keep local designFiles (base64 too large for frequent sync)
-        if(fresh.designFiles && fresh.designFiles.length > state.designFiles.length){
-          state.designFiles = fresh.designFiles;
+      if (!fresh || fresh.error || !fresh.jobs) return;
+
+      let changed = false;
+      ['jobs','clients','tasks','timeEntries','costItems','users','sections'].forEach(k => {
+        if (fresh[k] && JSON.stringify(fresh[k]) !== JSON.stringify(state[k])) {
+          state[k] = fresh[k];
+          changed = true;
         }
-        localStorage.setItem('storm43_v4_cache', JSON.stringify(state));
-        // Re-render if on a list view
-        if(['dashboard','studio','jobs','tasks','timelog'].includes(state.view)){
+      });
+      if (fresh.jobCounter && fresh.jobCounter > state.jobCounter) {
+        state.jobCounter = fresh.jobCounter;
+      }
+
+      if (changed) {
+        // Cache locally
+        try { localStorage.setItem('storm43_backup', JSON.stringify(state)); } catch(e) {}
+        // Re-render non-detail views silently
+        if (['dashboard','studio','jobs','tasks','timelog','costing','clients'].includes(state.view)) {
           render();
         }
-        const el=document.getElementById('sync-status');
-        if(el){el.textContent='☁ Live';el.style.color='var(--brand)';setTimeout(()=>{if(el)el.textContent='';},2000);}
+        const el = document.getElementById('sync-status');
+        if (el) { el.textContent = '☁ Updated'; el.style.color = 'var(--brand)'; setTimeout(()=>{if(el)el.textContent='';}, 2500); }
       }
-    }catch(e){}
+    } catch(e) {}
   }, 30000);
 }
 init();
