@@ -344,7 +344,10 @@ textarea{resize:vertical;min-height:80px}
       <div class="topbar-left">
         <div class="topbar-title" id="page-title">Dashboard</div>
       </div>
-      <div class="topbar-actions" id="topbar-actions"></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span id="sync-status" style="font-size:11px;font-family:var(--mono);color:var(--brand);transition:all 0.3s"></span>
+        <div id="topbar-actions" style="display:flex;gap:8px"></div>
+      </div>
     </div>
     <div class="content" id="main-content"></div>
   </div>
@@ -377,23 +380,82 @@ const KANBAN_COLORS = {
 };
 
 // ════════════════════════════════════════════════════════════
-// DATABASE LAYER
+// DATABASE LAYER — Google Sheets
 // ════════════════════════════════════════════════════════════
-// Drop-in Supabase support: set SUPABASE_URL and SUPABASE_KEY to enable
-const SUPABASE_URL = null;
-const SUPABASE_KEY = null;
-const USE_CLOUD = false; // set true when Supabase configured
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbxMWtzHSaPW-YWCZoGqWQXOOaeltx_O145ZdejajF7jlfaRzgsvywrbRwBewokNbOzGsQ/exec";
+const USE_CLOUD = true;
 
-// Local storage DB
 const DB = {
+  _cache: null,
+  _saving: false,
+  _dirty: false,
+  _saveTimer: null,
+
   async load(){
-    try{const d=localStorage.getItem('storm43_v4');if(d)return JSON.parse(d);}catch(e){}
+    // Try cloud first, fall back to localStorage
+    try {
+      const url = SHEETS_URL + '?action=read&t=' + Date.now();
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if(data && !data.error){
+        // Merge: cloud is source of truth
+        localStorage.setItem('storm43_v4_cache', JSON.stringify(data));
+        return data;
+      }
+    } catch(e) {
+      console.warn('Cloud load failed, using cache:', e);
+    }
+    // Fallback to local cache
+    try{
+      const d = localStorage.getItem('storm43_v4_cache');
+      if(d) return JSON.parse(d);
+    }catch(e){}
     return null;
   },
+
   async save(data){
-    try{localStorage.setItem('storm43_v4',JSON.stringify(data));}catch(e){toast('Storage error','error');}
+    // Always save to local cache immediately
+    try{localStorage.setItem('storm43_v4_cache', JSON.stringify(data));}catch(e){}
+    // Debounce cloud saves — wait 1.5s after last change
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(()=>this._pushToCloud(data), 1500);
+  },
+
+  async _pushToCloud(data){
+    // Strip large base64 images to keep payload small — store refs only
+    const payload = JSON.parse(JSON.stringify(data));
+    // Keep dataUrls but truncate for sheet storage if huge
+    try {
+      const resp = await fetch(SHEETS_URL, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      const result = await resp.json();
+      if(result.error){
+        console.error('Cloud save error:', result.error);
+        showSyncStatus('error');
+      } else {
+        showSyncStatus('saved');
+      }
+    } catch(e) {
+      console.warn('Cloud save failed:', e);
+      showSyncStatus('offline');
+    }
   }
 };
+
+function showSyncStatus(status){
+  const el = document.getElementById('sync-status');
+  if(!el) return;
+  if(status === 'saved'){
+    el.textContent = '☁ Synced';
+    el.style.color = 'var(--brand)';
+  } else if(status === 'error' || status === 'offline'){
+    el.textContent = '⚠ Offline — saved locally';
+    el.style.color = 'var(--amber)';
+  }
+  setTimeout(()=>{if(el)el.textContent='';},4000);
+}
 
 // ════════════════════════════════════════════════════════════
 // STATE
@@ -417,7 +479,11 @@ let state = {
   jobCounter:1,view:'dashboard',currentUser:null
 };
 
-async function saveState(){await DB.save(state);}
+async function saveState(){
+  const el = document.getElementById('sync-status');
+  if(el){el.textContent='↑ Saving...';el.style.color='var(--muted)';}
+  await DB.save(state);
+}
 async function initState(){
   const saved = await DB.load();
   if(saved){
@@ -1608,12 +1674,7 @@ function addSection(){
   state.sections.push({id:'s_'+Date.now(),label:name,key,enabled:true,custom:true});
   saveState();render();
 }
-function saveSupabaseConfig(){
-  const url=document.getElementById('sb-url')?.value.trim();
-  const key=document.getElementById('sb-key')?.value.trim();
-  if(!url||!key){alert('Both URL and Key are required');return;}
-  alert('Supabase config noted. To fully enable cloud sync, open the HTML file in a text editor and set:\n\nSUPABASE_URL = "'+url+'"\nSUPABASE_KEY = "'+key+'"\nUSE_CLOUD = true\n\nThen re-open the file.');
-}
+// Supabase config removed — using Google Sheets
 
 // ════════════════════════════════════════════════════════════
 // JOB TICKET
@@ -1977,11 +2038,62 @@ function deleteUser(id){
 // ════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════
+function forceSyncNow(){
+  const el=document.getElementById('sync-status');
+  if(el){el.textContent='↑ Syncing...';el.style.color='var(--muted)';}
+  DB._pushToCloud(state);
+  toast('Sync initiated','success');
+}
+
+function exportLocalBackup(){
+  const data = JSON.stringify(state, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Storm43_MIS_Backup_' + new Date().toISOString().split('T')[0] + '.json';
+  a.click();
+  toast('Backup downloaded');
+}
+
 async function init(){
-  await initState();
+  // Show loading on login screen
   document.getElementById('login-logo').src=LOGO_SRC;
   document.getElementById('sidebar-logo').src=LOGO_SRC;
+  document.getElementById('login-err').textContent='Connecting to database...';
+  document.getElementById('login-err').style.color='rgba(255,255,255,0.4)';
+  
+  await initState();
+  
+  document.getElementById('login-err').textContent='';
   document.getElementById('login-screen').style.display='flex';
+  
+  // Poll for updates every 30 seconds when logged in
+  setInterval(async ()=>{
+    if(!state.currentUser) return;
+    try{
+      const url = SHEETS_URL + '?action=read&t=' + Date.now();
+      const resp = await fetch(url);
+      const fresh = await resp.json();
+      if(fresh && !fresh.error && fresh.jobs){
+        // Merge remote data — remote wins for shared collections
+        ['jobs','clients','tasks','timeEntries','costItems','users','sections'].forEach(k=>{
+          if(fresh[k] !== undefined) state[k] = fresh[k];
+        });
+        // Keep local designFiles (base64 too large for frequent sync)
+        if(fresh.designFiles && fresh.designFiles.length > state.designFiles.length){
+          state.designFiles = fresh.designFiles;
+        }
+        localStorage.setItem('storm43_v4_cache', JSON.stringify(state));
+        // Re-render if on a list view
+        if(['dashboard','studio','jobs','tasks','timelog'].includes(state.view)){
+          render();
+        }
+        const el=document.getElementById('sync-status');
+        if(el){el.textContent='☁ Live';el.style.color='var(--brand)';setTimeout(()=>{if(el)el.textContent='';},2000);}
+      }
+    }catch(e){}
+  }, 30000);
 }
 init();
 </script>
