@@ -590,106 +590,101 @@ textarea{resize:vertical;min-height:90px;line-height:1.6}
 // ════════════════════════════════════════════════════════════
 // CONFIG
 // ════════════════════════════════════════════════════════════
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbxMWtzHSaPW-YWCZoGqWQXOOaeltx_O145ZdejajF7jlfaRzgsvywrbRwBewokNbOzGsQ/exec';
-const ANTHROPIC_PROXY = 'https://api.anthropic.com/v1/messages';
+var SHEETS_URL = 'https://script.google.com/macros/s/AKfycbxMWtzHSaPW-YWCZoGqWQXOOaeltx_O145ZdejajF7jlfaRzgsvywrbRwBewokNbOzGsQ/exec';
 
 // ════════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════════
-let currentStep = 1;
-const totalSteps = 5;
-let uploadedFiles = [];
-let aiConversation = [];
-let toneSelected = [];
+var currentStep = 1;
+var totalSteps = 5;
+var uploadedFiles = [];
+var aiConversation = [];
+var toneSelected = [];
 
-const STEP_LABELS = ['Your Details','Project Info','Design Brief','Specs & Files','Review & Submit'];
+var STEP_LABELS = ['Your Details', 'Project Info', 'Design Brief', 'Specs & Files', 'Review & Submit'];
 
 // ════════════════════════════════════════════════════════════
-// TOAST
+// UTILS
 // ════════════════════════════════════════════════════════════
-function toast(msg, type='success') {
-  const t = document.createElement('div');
-  t.className = `toast ${type}`;
+function toast(msg, type) {
+  type = type || 'success';
+  var t = document.createElement('div');
+  t.className = 'toast ' + type;
   t.textContent = msg;
   document.getElementById('toast-wrap').appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(function() { if (t.parentNode) t.parentNode.removeChild(t); }, 3500);
+}
+
+function gv(id) {
+  var el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + 'B';
+  if (b < 1048576) return (Math.floor(b/1024)) + 'KB';
+  return (b/1048576).toFixed(1) + 'MB';
 }
 
 // ════════════════════════════════════════════════════════════
 // PROGRESS
 // ════════════════════════════════════════════════════════════
 function updateProgress() {
-  const pct = Math.round(((currentStep - 1) / (totalSteps - 1)) * 100);
+  var pct = Math.round(((currentStep - 1) / (totalSteps - 1)) * 100);
   document.getElementById('prog-fill').style.width = pct + '%';
   document.getElementById('prog-pct').textContent = pct + '%';
-  document.getElementById('prog-label').textContent = `Step ${currentStep} of ${totalSteps} — ${STEP_LABELS[currentStep-1]}`;
-  const dots = document.getElementById('step-dots');
-  dots.innerHTML = STEP_LABELS.map((l,i) => `
-    <div class="step-dot ${i+1===currentStep?'active':i+1<currentStep?'done':''}">
-      <div class="step-dot-circle"></div>
-      <div class="step-dot-label">${l}</div>
-    </div>`).join('');
-}
-
-// ════════════════════════════════════════════════════════════
-// NAVIGATION
-// ════════════════════════════════════════════════════════════
-function nextStep(from) {
-  if (!validateStep(from)) return;
-  if (from === 4) buildReview();
-  if (from === 2) {
-    // Show packaging specs if packaging-related design type
-    const dt = document.getElementById('f-design-type').value;
-    const pkgTypes = ['Packaging','Label Design'];
-    document.getElementById('packaging-specs').style.display = pkgTypes.includes(dt) ? 'block' : 'none';
+  document.getElementById('prog-label').textContent = 'Step ' + currentStep + ' of ' + totalSteps + ' — ' + STEP_LABELS[currentStep - 1];
+  var dots = document.getElementById('step-dots');
+  var html = '';
+  for (var i = 0; i < STEP_LABELS.length; i++) {
+    var cls = 'step-dot';
+    if (i + 1 === currentStep) cls += ' active';
+    else if (i + 1 < currentStep) cls += ' done';
+    html += '<div class="' + cls + '"><div class="step-dot-circle"></div><div class="step-dot-label">' + STEP_LABELS[i] + '</div></div>';
   }
-  document.getElementById(`step-${from}`).classList.remove('active');
-  currentStep = from + 1;
-  document.getElementById(`step-${currentStep}`).classList.add('active');
-  updateProgress();
-  window.scrollTo({top:0,behavior:'smooth'});
-
-  // Personalise AI on step 3
-  if (currentStep === 3) personaliseAi();
-}
-
-function prevStep(from) {
-  document.getElementById(`step-${from}`).classList.remove('active');
-  currentStep = from - 1;
-  document.getElementById(`step-${currentStep}`).classList.add('active');
-  updateProgress();
-  window.scrollTo({top:0,behavior:'smooth'});
+  dots.innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════
-// VALIDATION
+// VALIDATION — fixed, no arrow functions
 // ════════════════════════════════════════════════════════════
+function isValidEmail(val) {
+  return val.length > 3 && val.indexOf('@') > 0 && val.indexOf('.') > val.indexOf('@');
+}
+
 function validateStep(step) {
-  const checks = {
+  var errors = {
     1: [
-      {id:'f-name', msg:'Please enter your full name'},
-      {id:'f-company', msg:'Please enter your company name'},
-      {id:'f-email', msg:'Please enter a valid email address', validate: v => /^[^@]+@[^@]+\.[^@]+$/.test(v)},
+      { id: 'f-name',    msg: 'Please enter your full name' },
+      { id: 'f-company', msg: 'Please enter your company name' },
+      { id: 'f-email',   msg: 'Please enter a valid email address', fn: isValidEmail }
     ],
     2: [
-      {id:'f-project', msg:'Please enter a project name'},
-      {id:'f-design-type', msg:'Please select a design type'},
+      { id: 'f-project',     msg: 'Please enter a project name' },
+      { id: 'f-design-type', msg: 'Please select a design type — tap one of the options above' }
     ],
     3: [
-      {id:'f-summary', msg:'Please provide a project summary'},
-    ],
+      { id: 'f-summary', msg: 'Please provide a brief project summary before continuing' }
+    ]
   };
-  const rules = checks[step];
+
+  var rules = errors[step];
   if (!rules) return true;
-  for (const rule of rules) {
-    const el = document.getElementById(rule.id);
-    const val = el ? el.value.trim() : '';
-    const valid = rule.validate ? rule.validate(val) : val.length > 0;
+
+  for (var i = 0; i < rules.length; i++) {
+    var rule = rules[i];
+    var el = document.getElementById(rule.id);
+    var val = el ? el.value.trim() : '';
+    var valid = rule.fn ? rule.fn(val) : val.length > 0;
     if (!valid) {
-      el && el.classList.add('input-err');
-      el && el.focus();
+      if (el) {
+        el.classList.add('input-err');
+        el.focus();
+        setTimeout(function(elem) {
+          return function() { elem.classList.remove('input-err'); };
+        }(el), 2500);
+      }
       toast(rule.msg, 'error');
-      setTimeout(() => el && el.classList.remove('input-err'), 2000);
       return false;
     }
   }
@@ -697,20 +692,64 @@ function validateStep(step) {
 }
 
 // ════════════════════════════════════════════════════════════
+// NAVIGATION
+// ════════════════════════════════════════════════════════════
+function nextStep(from) {
+  if (!validateStep(from)) return;
+
+  // Show packaging specs on step 4 if packaging design type
+  if (from === 2) {
+    var dt = gv('f-design-type');
+    var pkgTypes = ['Packaging', 'Label Design'];
+    var show = false;
+    for (var p = 0; p < pkgTypes.length; p++) {
+      if (dt === pkgTypes[p]) { show = true; break; }
+    }
+    document.getElementById('packaging-specs').style.display = show ? 'block' : 'none';
+  }
+
+  // Build review on last step
+  if (from === 4) buildReview();
+
+  document.getElementById('step-' + from).classList.remove('active');
+  currentStep = from + 1;
+  document.getElementById('step-' + currentStep).classList.add('active');
+  updateProgress();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Personalise AI when entering step 3
+  if (currentStep === 3) personaliseAi();
+}
+
+function prevStep(from) {
+  document.getElementById('step-' + from).classList.remove('active');
+  currentStep = from - 1;
+  document.getElementById('step-' + currentStep).classList.add('active');
+  updateProgress();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ════════════════════════════════════════════════════════════
 // CHIPS
 // ════════════════════════════════════════════════════════════
 function selectChip(groupId, value, el) {
-  document.getElementById(groupId).querySelectorAll('.chip').forEach(c => c.classList.remove('selected'));
+  var chips = document.getElementById(groupId).querySelectorAll('.chip');
+  for (var i = 0; i < chips.length; i++) chips[i].classList.remove('selected');
   el.classList.add('selected');
-  // Map group to hidden input
-  const map = {'chips-design':'f-design-type','chips-project':'f-project-type','chips-priority':'f-priority'};
-  const inputId = map[groupId];
+  var map = {
+    'chips-design': 'f-design-type',
+    'chips-project': 'f-project-type',
+    'chips-priority': 'f-priority'
+  };
+  var inputId = map[groupId];
   if (inputId) document.getElementById(inputId).value = value;
 }
 
 function toggleChip(groupId, value, el) {
   el.classList.toggle('selected');
-  const selected = [...document.getElementById(groupId).querySelectorAll('.chip.selected')].map(c => c.textContent);
+  var selected = [];
+  var chips = document.getElementById(groupId).querySelectorAll('.chip.selected');
+  for (var i = 0; i < chips.length; i++) selected.push(chips[i].textContent);
   toneSelected = selected;
   document.getElementById('f-tone').value = selected.join(', ');
 }
@@ -719,50 +758,65 @@ function toggleChip(groupId, value, el) {
 // FILE UPLOAD
 // ════════════════════════════════════════════════════════════
 function handleFileSelect(input) {
-  Array.from(input.files).forEach(addFile);
+  var files = Array.prototype.slice.call(input.files);
+  files.forEach(function(f) { addFile(f); });
 }
+
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('upload-zone').classList.remove('drag');
-  Array.from(e.dataTransfer.files).forEach(addFile);
+  var files = Array.prototype.slice.call(e.dataTransfer.files);
+  files.forEach(function(f) { addFile(f); });
 }
+
 function addFile(file) {
-  if (uploadedFiles.find(f => f.name === file.name)) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    uploadedFiles.push({name:file.name, size:formatBytes(file.size), dataUrl:e.target.result, type:file.type});
-    renderFileList();
-  };
+  for (var i = 0; i < uploadedFiles.length; i++) {
+    if (uploadedFiles[i].name === file.name) return;
+  }
+  var reader = new FileReader();
+  reader.onload = (function(f) {
+    return function(e) {
+      uploadedFiles.push({ name: f.name, size: formatBytes(f.size), dataUrl: e.target.result, type: f.type });
+      renderFileList();
+    };
+  })(file);
   reader.readAsDataURL(file);
 }
+
 function removeFile(name) {
-  uploadedFiles = uploadedFiles.filter(f => f.name !== name);
+  uploadedFiles = uploadedFiles.filter(function(f) { return f.name !== name; });
   renderFileList();
 }
+
 function renderFileList() {
-  document.getElementById('file-list').innerHTML = uploadedFiles.map(f => `
-    <div class="file-item">
-      <div class="file-item-icon">${f.type.startsWith('image/') ? '🖼️' : f.type === 'application/pdf' ? '📄' : '📎'}</div>
-      <div class="file-item-name">${f.name}</div>
-      <div class="file-item-size">${f.size}</div>
-      <button class="file-item-remove" onclick="removeFile('${f.name.replace(/'/g,"\'")}')">✕</button>
-    </div>`).join('');
-}
-function formatBytes(b) {
-  if (b < 1024) return b + 'B';
-  if (b < 1048576) return (b/1024).toFixed(0) + 'KB';
-  return (b/1048576).toFixed(1) + 'MB';
+  var html = '';
+  for (var i = 0; i < uploadedFiles.length; i++) {
+    var f = uploadedFiles[i];
+    var icon = f.type && f.type.indexOf('image') === 0 ? '🖼️' : f.type === 'application/pdf' ? '📄' : '📎';
+    html += '<div class="file-item">' +
+      '<div class="file-item-icon">' + icon + '</div>' +
+      '<div class="file-item-name">' + f.name + '</div>' +
+      '<div class="file-item-size">' + f.size + '</div>' +
+      '<button class="file-item-remove" onclick="removeFile('' + f.name.replace(/'/g, "\'") + '')">✕</button>' +
+      '</div>';
+  }
+  document.getElementById('file-list').innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════
 // AI ASSISTANT
 // ════════════════════════════════════════════════════════════
 function personaliseAi() {
-  const name = document.getElementById('f-name').value.split(' ')[0];
-  const project = document.getElementById('f-project').value;
-  const designType = document.getElementById('f-design-type').value;
-  if (name || project) {
-    addAiMessage(`Hi ${name}! I can see you're working on ${project ? '"'+project+'"' : 'a '+designType+' project'}. Let me help you build a detailed brief. What's the story behind this project — what's the problem you're solving or the opportunity you're going after?`, 'ai');
+  var name = gv('f-name').split(' ')[0];
+  var project = gv('f-project');
+  var designType = gv('f-design-type');
+  var msgs = document.getElementById('ai-messages');
+  // Only add personalised greeting if no prior conversation
+  if (aiConversation.length === 0 && (name || project)) {
+    var greeting = 'Hi ' + (name || 'there') + '! I can see you\'re working on ' +
+      (project ? '"' + project + '"' : 'a ' + designType + ' project') +
+      '. Let me help you build a detailed brief. What\'s the story behind this project — what problem are you solving or opportunity are you going after?';
+    addAiMessage(greeting, 'ai');
   }
 }
 
@@ -771,130 +825,114 @@ function useAiSuggestion(el) {
   sendAiMessage();
 }
 
-async function sendAiMessage() {
-  const input = document.getElementById('ai-user-input');
-  const msg = input.value.trim();
+function sendAiMessage() {
+  var input = document.getElementById('ai-user-input');
+  var msg = input ? input.value.trim() : '';
   if (!msg) return;
   input.value = '';
-  document.getElementById('ai-send-btn').disabled = true;
+
+  var sendBtn = document.getElementById('ai-send-btn');
+  if (sendBtn) sendBtn.disabled = true;
+
   addAiMessage(msg, 'user');
   addAiMessage('Thinking...', 'ai', true);
+  aiConversation.push({ role: 'user', content: msg });
 
-  // Build context from form
-  const context = buildBriefContext();
-  aiConversation.push({role:'user', content: msg});
+  var systemPrompt = 'You are the Storm43 Creative Media Agency brief assistant. Storm43 is a South African creative agency specialising in packaging design, brand development, and digital media. Help clients fill out a creative brief. Be warm, professional, and conversational. Keep responses to 2-4 sentences. Ask one focused question at a time. If you extract useful info, end with [EXTRACT: {"field":"fieldname","value":"text"}] — valid fields: summary, audience, competitors, colours, notes. Never discuss pricing — say the team will confirm.';
 
-  const systemPrompt = `You are the Storm43 Creative Media Agency brief assistant. Storm43 is a South African creative agency specialising in packaging design, brand development, and digital media.
+  var messages = aiConversation.slice(-8);
 
-Your job is to help clients fill out a creative brief. Be warm, professional, and conversational. Ask one focused question at a time. 
-
-Current brief context:
-${context}
-
-Guidelines:
-- Keep responses concise (2-4 sentences max unless explaining something complex)
-- When the client gives you good information, acknowledge it and ask a follow-up to deepen it
-- If you extract useful brief information from the conversation, end your response with a JSON block like: [EXTRACT: {"field":"summary","value":"the extracted text"}] — valid fields: summary, audience, competitors, colours, notes
-- Be enthusiastic and encouraging — help clients feel confident about their brief
-- If asked about pricing or timelines, say the team will confirm these after reviewing the brief`;
-
-  try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': '', // Handled by Claude.ai context — will use proxy
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 500,
-        system: systemPrompt,
-        messages: aiConversation.slice(-8) // last 8 messages for context
-      })
-    });
-
-    const data = await resp.json();
+  fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      system: systemPrompt,
+      messages: messages
+    })
+  })
+  .then(function(resp) { return resp.json(); })
+  .then(function(data) {
     removeTypingMsg();
-
-    let reply = '';
+    var reply = '';
     if (data.content && data.content[0]) {
       reply = data.content[0].text || '';
-    } else if (data.error) {
-      reply = "I'm having trouble connecting right now. Please fill in the brief fields above directly — I'll be back shortly!";
+    } else {
+      reply = getFallbackReply();
     }
 
     // Check for field extractions
-    const extractMatch = reply.match(/\[EXTRACT:\s*(\{[^}]+\})\]/);
+    var extractMatch = reply.match(/\[EXTRACT:\s*(\{[^}]+\})\]/);
     if (extractMatch) {
       try {
-        const extracted = JSON.parse(extractMatch[1]);
+        var extracted = JSON.parse(extractMatch[1]);
         applyExtraction(extracted);
-        reply = reply.replace(/\[EXTRACT:[^\]]+\]/, '').trim();
-        document.getElementById('ai-applied').style.display = 'flex';
-        setTimeout(() => document.getElementById('ai-applied').style.display = 'none', 3000);
-      } catch(e) {}
+        reply = reply.replace(/\[EXTRACT:[^\]]+\]/g, '').trim();
+        var applied = document.getElementById('ai-applied');
+        if (applied) {
+          applied.style.display = 'flex';
+          setTimeout(function() { applied.style.display = 'none'; }, 3000);
+        }
+      } catch (ex) {}
     }
 
-    aiConversation.push({role:'assistant', content: reply});
+    aiConversation.push({ role: 'assistant', content: reply });
     addAiMessage(reply, 'ai');
-
-  } catch(e) {
+    if (sendBtn) sendBtn.disabled = false;
+  })
+  .catch(function() {
     removeTypingMsg();
-    const fallbackReplies = [
-      "That's really helpful context! Could you tell me more about who your primary customer is — age range, lifestyle, what matters to them?",
-      "Great! And thinking about the visual side — are there any brands or products whose packaging or design you admire? Even outside your category?",
-      "Perfect. What's the one thing you'd want someone to feel or think when they see this design for the first time?",
-      "Excellent detail! Do you have any existing brand assets — logo, colours, fonts — that we need to work with, or is this a completely fresh start?",
-    ];
-    const fallback = fallbackReplies[Math.floor(Math.random() * fallbackReplies.length)];
-    aiConversation.push({role:'assistant', content: fallback});
-    addAiMessage(fallback, 'ai');
-  }
+    var reply = getFallbackReply();
+    aiConversation.push({ role: 'assistant', content: reply });
+    addAiMessage(reply, 'ai');
+    if (sendBtn) sendBtn.disabled = false;
+  });
 
-  document.getElementById('ai-send-btn').disabled = false;
-  input.focus();
+  if (input) input.focus();
 }
 
-function buildBriefContext() {
-  return [
-    `Client: ${document.getElementById('f-name').value} from ${document.getElementById('f-company').value}`,
-    `Project: ${document.getElementById('f-project').value}`,
-    `Design Type: ${document.getElementById('f-design-type').value}`,
-    `Project Type: ${document.getElementById('f-project-type').value}`,
-    `Summary so far: ${document.getElementById('f-summary').value || 'not yet filled'}`,
-    `Target audience: ${document.getElementById('f-audience').value || 'not yet filled'}`,
-    `Tone/feel: ${document.getElementById('f-tone').value || 'not selected'}`,
-    `Colour preferences: ${document.getElementById('f-colours').value || 'not yet filled'}`,
-  ].join('
-');
+function getFallbackReply() {
+  var replies = [
+    "That's really helpful! Could you tell me more about who your primary customer is — their age, lifestyle, and what matters most to them?",
+    "Great context! Are there any brands or products whose packaging or design you admire? Even outside your category?",
+    "Excellent! What's the one feeling you'd want someone to have when they see this design for the first time?",
+    "Perfect. Do you have existing brand assets — logo, colours, fonts — that we need to work with, or is this a fresh start?",
+    "Noted! What makes your product or brand different from your competitors — what's your unique angle?"
+  ];
+  return replies[Math.floor(Math.random() * replies.length)];
 }
 
 function applyExtraction(extracted) {
-  const map = {
+  var map = {
     summary: 'f-summary',
     audience: 'f-audience',
     competitors: 'f-competitors',
     colours: 'f-colours',
-    notes: 'f-notes',
+    notes: 'f-notes'
   };
-  const inputId = map[extracted.field];
-  if (inputId) {
-    const el = document.getElementById(inputId);
-    if (el && !el.value.trim()) {
-      el.value = extracted.value;
-    } else if (el && el.value.trim()) {
-      // Append if already has content
-      el.value = el.value.trim() + ' ' + extracted.value;
+  var inputId = map[extracted.field];
+  if (inputId && extracted.value) {
+    var el = document.getElementById(inputId);
+    if (el) {
+      if (!el.value.trim()) {
+        el.value = extracted.value;
+      } else {
+        el.value = el.value.trim() + ' ' + extracted.value;
+      }
     }
   }
 }
 
-function addAiMessage(text, role, typing=false) {
-  const msgs = document.getElementById('ai-messages');
-  const div = document.createElement('div');
-  div.className = `ai-msg ${role}${typing ? ' typing' : ''}`;
+function addAiMessage(text, role, typing) {
+  var msgs = document.getElementById('ai-messages');
+  var div = document.createElement('div');
+  div.className = 'ai-msg ' + role + (typing ? ' typing' : '');
   div.textContent = text;
   if (typing) div.id = 'ai-typing';
   msgs.appendChild(div);
@@ -902,181 +940,180 @@ function addAiMessage(text, role, typing=false) {
 }
 
 function removeTypingMsg() {
-  const t = document.getElementById('ai-typing');
-  if (t) t.remove();
+  var t = document.getElementById('ai-typing');
+  if (t && t.parentNode) t.parentNode.removeChild(t);
 }
 
 // ════════════════════════════════════════════════════════════
-// REVIEW BUILDER
+// REVIEW
 // ════════════════════════════════════════════════════════════
 function buildReview() {
-  const sections = [
+  var sections = [
     {
-      title: 'Client Details',
-      icon: '👤',
+      title: 'Client Details', icon: '👤',
       fields: [
-        ['Name', document.getElementById('f-name').value],
-        ['Company', document.getElementById('f-company').value],
-        ['Email', document.getElementById('f-email').value],
-        ['Phone', document.getElementById('f-phone').value],
-        ['Industry', document.getElementById('f-industry').value],
+        ['Name', gv('f-name')],
+        ['Company', gv('f-company')],
+        ['Email', gv('f-email')],
+        ['Phone', gv('f-phone')],
+        ['Industry', gv('f-industry')],
+        ['Referral', gv('f-referral')]
       ]
     },
     {
-      title: 'Project Info',
-      icon: '📋',
+      title: 'Project Info', icon: '📋',
       fields: [
-        ['Project Name', document.getElementById('f-project').value],
-        ['Design Type', document.getElementById('f-design-type').value],
-        ['Project Type', document.getElementById('f-project-type').value],
-        ['Priority', document.getElementById('f-priority').value],
-        ['Due Date', document.getElementById('f-due').value],
-        ['Budget', document.getElementById('f-budget').value],
+        ['Project Name', gv('f-project')],
+        ['Design Type', gv('f-design-type')],
+        ['Project Type', gv('f-project-type')],
+        ['Priority', gv('f-priority')],
+        ['Due Date', gv('f-due')],
+        ['Budget', gv('f-budget')]
       ]
     },
     {
-      title: 'Design Brief',
-      icon: '✨',
+      title: 'Design Brief', icon: '✨',
       fields: [
-        ['Summary', document.getElementById('f-summary').value],
-        ['Target Audience', document.getElementById('f-audience').value],
-        ['Competitors / Inspiration', document.getElementById('f-competitors').value],
-        ['Brand Tone', document.getElementById('f-tone').value],
-        ['Colour Preferences', document.getElementById('f-colours').value],
-        ['Brand Colours', document.getElementById('f-brand-colours').value],
-        ['Additional Notes', document.getElementById('f-notes').value],
+        ['Summary', gv('f-summary')],
+        ['Target Audience', gv('f-audience')],
+        ['Competitors / Inspiration', gv('f-competitors')],
+        ['Brand Tone', gv('f-tone')],
+        ['Colour Preferences', gv('f-colours')],
+        ['Brand Colours', gv('f-brand-colours')],
+        ['Additional Notes', gv('f-notes')]
       ]
-    },
+    }
   ];
 
-  // Packaging specs if shown
-  if (document.getElementById('packaging-specs').style.display !== 'none') {
+  var pkgVisible = document.getElementById('packaging-specs').style.display !== 'none';
+  if (pkgVisible) {
     sections.push({
-      title: 'Packaging Specs',
-      icon: '📐',
+      title: 'Packaging Specs', icon: '📐',
       fields: [
-        ['Packaging Type', document.getElementById('f-pkg-type').value],
-        ['Pack Format', document.getElementById('f-pack-format').value],
-        ['Dimensions', document.getElementById('f-dims').value],
-        ['Substrate', document.getElementById('f-substrate').value],
-        ['Print Process', document.getElementById('f-print-process').value],
-        ['Colour System', document.getElementById('f-colour').value],
-        ['Finishing', document.getElementById('f-finishing').value],
-        ['Barcode', document.getElementById('f-barcode').value],
-        ['Nutrition Panel', document.getElementById('f-nutrition').value],
-        ['Shelf Life', document.getElementById('f-shelf').value],
-        ['Legal Requirements', document.getElementById('f-legal').value],
+        ['Packaging Type', gv('f-pkg-type')],
+        ['Pack Format', gv('f-pack-format')],
+        ['Dimensions', gv('f-dims')],
+        ['Substrate', gv('f-substrate')],
+        ['Print Process', gv('f-print-process')],
+        ['Colour System', gv('f-colour')],
+        ['Finishing', gv('f-finishing')],
+        ['Barcode', gv('f-barcode')],
+        ['Nutrition Panel', gv('f-nutrition')],
+        ['Shelf Life', gv('f-shelf')],
+        ['Legal Requirements', gv('f-legal')]
       ]
     });
   }
 
-  document.getElementById('review-content').innerHTML = sections.map(s => `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px">
-      <div style="padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-        <span style="font-size:16px">${s.icon}</span>
-        <span style="font-size:13px;font-weight:600">${s.title}</span>
-      </div>
-      <div style="padding:12px 16px">
-        ${s.fields.filter(([,v])=>v).map(([l,v])=>`
-        <div style="display:flex;gap:12px;padding:6px 0;border-bottom:1px solid var(--border2);font-size:13px">
-          <span style="color:var(--muted);font-size:11px;font-family:var(--mono);min-width:140px;flex-shrink:0;padding-top:1px">${l}</span>
-          <span style="font-weight:500;line-height:1.5">${v}</span>
-        </div>`).join('')}
-        ${!s.fields.filter(([,v])=>v).length ? '<div style="font-size:12px;color:var(--subtle);padding:4px 0">No information provided</div>' : ''}
-      </div>
-    </div>`).join('') +
-  (uploadedFiles.length ? `
-    <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--rl);overflow:hidden;margin-bottom:14px">
-      <div style="padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-        <span style="font-size:16px">📎</span><span style="font-size:13px;font-weight:600">Attached Files (${uploadedFiles.length})</span>
-      </div>
-      <div style="padding:12px 16px">
-        ${uploadedFiles.map(f=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;font-family:var(--mono)">
-          <span>${f.type.startsWith('image/') ? '🖼️' : '📄'}</span>
-          <span>${f.name}</span>
-          <span style="color:var(--subtle)">${f.size}</span>
-        </div>`).join('')}
-      </div>
-    </div>` : '');
+  var html = '';
+  for (var s = 0; s < sections.length; s++) {
+    var sec = sections[s];
+    var rowsHtml = '';
+    for (var r = 0; r < sec.fields.length; r++) {
+      var f = sec.fields[r];
+      if (!f[1]) continue;
+      rowsHtml += '<div style="display:flex;gap:12px;padding:6px 0;border-bottom:1px solid #ececea;font-size:13px">' +
+        '<span style="color:#6b6b60;font-size:11px;font-family:var(--mono);min-width:140px;flex-shrink:0;padding-top:1px">' + f[0] + '</span>' +
+        '<span style="font-weight:500;line-height:1.5">' + f[1] + '</span>' +
+        '</div>';
+    }
+    if (!rowsHtml) rowsHtml = '<div style="font-size:12px;color:#a8a89a;padding:4px 0">No information provided</div>';
+    html += '<div style="background:#f4f3ef;border:1px solid #e0dfd9;border-radius:12px;overflow:hidden;margin-bottom:12px">' +
+      '<div style="padding:12px 16px;background:#fff;border-bottom:1px solid #e0dfd9;display:flex;align-items:center;gap:8px">' +
+      '<span style="font-size:16px">' + sec.icon + '</span>' +
+      '<span style="font-size:13px;font-weight:600">' + sec.title + '</span></div>' +
+      '<div style="padding:12px 16px">' + rowsHtml + '</div></div>';
+  }
+
+  if (uploadedFiles.length > 0) {
+    var filesHtml = '';
+    for (var fi = 0; fi < uploadedFiles.length; fi++) {
+      var file = uploadedFiles[fi];
+      var icon = file.type && file.type.indexOf('image') === 0 ? '🖼️' : '📄';
+      filesHtml += '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;font-family:var(--mono)">' +
+        '<span>' + icon + '</span><span>' + file.name + '</span><span style="color:#a8a89a">' + file.size + '</span></div>';
+    }
+    html += '<div style="background:#f4f3ef;border:1px solid #e0dfd9;border-radius:12px;overflow:hidden;margin-bottom:12px">' +
+      '<div style="padding:12px 16px;background:#fff;border-bottom:1px solid #e0dfd9;display:flex;align-items:center;gap:8px">' +
+      '<span style="font-size:16px">📎</span>' +
+      '<span style="font-size:13px;font-weight:600">Attached Files (' + uploadedFiles.length + ')</span></div>' +
+      '<div style="padding:12px 16px">' + filesHtml + '</div></div>';
+  }
+
+  document.getElementById('review-content').innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════
 // SUBMIT
 // ════════════════════════════════════════════════════════════
-async function submitBrief() {
-  const btn = document.getElementById('submit-btn');
+function submitBrief() {
+  var btn = document.getElementById('submit-btn');
   btn.disabled = true;
   btn.textContent = 'Submitting...';
 
-  // Build the brief data object
-  const year = new Date().getFullYear();
-  const ref = 'BRF-' + year + '-' + String(Math.floor(Math.random() * 9000) + 1000);
+  var year = new Date().getFullYear();
+  var ref = 'BRF-' + year + '-' + String(Math.floor(Math.random() * 9000) + 1000);
 
-  const briefData = {
-    ref,
+  var briefData = {
+    ref: ref,
     submittedAt: new Date().toISOString(),
     status: 'New Brief',
-    // Client
-    clientName: document.getElementById('f-name').value,
-    clientCompany: document.getElementById('f-company').value,
-    clientEmail: document.getElementById('f-email').value,
-    clientPhone: document.getElementById('f-phone').value,
-    clientIndustry: document.getElementById('f-industry').value,
-    referral: document.getElementById('f-referral').value,
-    // Project
-    projectName: document.getElementById('f-project').value,
-    designType: document.getElementById('f-design-type').value,
-    projectType: document.getElementById('f-project-type').value,
-    priority: document.getElementById('f-priority').value,
-    dueDate: document.getElementById('f-due').value,
-    budget: document.getElementById('f-budget').value,
-    // Brief
-    summary: document.getElementById('f-summary').value,
-    audience: document.getElementById('f-audience').value,
-    competitors: document.getElementById('f-competitors').value,
-    tone: document.getElementById('f-tone').value,
-    colours: document.getElementById('f-colours').value,
-    brandColours: document.getElementById('f-brand-colours').value,
-    notes: document.getElementById('f-notes').value,
-    // AI conversation log
-    aiConversationSummary: aiConversation.map(m => m.role.toUpperCase() + ': ' + m.content).join('
----
-'),
-    // Specs
-    packagingType: document.getElementById('f-pkg-type')?.value,
-    packFormat: document.getElementById('f-pack-format')?.value,
-    dimensions: document.getElementById('f-dims')?.value,
-    substrate: document.getElementById('f-substrate')?.value,
-    printProcess: document.getElementById('f-print-process')?.value,
-    colourSystem: document.getElementById('f-colour')?.value,
-    finishing: document.getElementById('f-finishing')?.value,
-    barcodeRequired: document.getElementById('f-barcode')?.value,
-    nutritionPanel: document.getElementById('f-nutrition')?.value,
-    shelfLife: document.getElementById('f-shelf')?.value,
-    legalReqs: document.getElementById('f-legal')?.value,
-    // Files (metadata only - not base64 for sheets)
-    attachedFiles: uploadedFiles.map(f => ({name:f.name, size:f.size, type:f.type})),
-    attachedCount: uploadedFiles.length,
+    clientName: gv('f-name'),
+    clientCompany: gv('f-company'),
+    clientEmail: gv('f-email'),
+    clientPhone: gv('f-phone'),
+    clientIndustry: gv('f-industry'),
+    referral: gv('f-referral'),
+    projectName: gv('f-project'),
+    designType: gv('f-design-type'),
+    projectType: gv('f-project-type'),
+    priority: gv('f-priority'),
+    dueDate: gv('f-due'),
+    budget: gv('f-budget'),
+    summary: gv('f-summary'),
+    audience: gv('f-audience'),
+    competitors: gv('f-competitors'),
+    tone: gv('f-tone'),
+    colours: gv('f-colours'),
+    brandColours: gv('f-brand-colours'),
+    notes: gv('f-notes'),
+    aiConversationSummary: aiConversation.map(function(m) { return m.role.toUpperCase() + ': ' + m.content; }).join('\n---\n'),
+    packagingType: gv('f-pkg-type'),
+    packFormat: gv('f-pack-format'),
+    dimensions: gv('f-dims'),
+    substrate: gv('f-substrate'),
+    printProcess: gv('f-print-process'),
+    colourSystem: gv('f-colour'),
+    finishing: gv('f-finishing'),
+    barcodeRequired: gv('f-barcode'),
+    nutritionPanel: gv('f-nutrition'),
+    shelfLife: gv('f-shelf'),
+    legalReqs: gv('f-legal'),
+    attachedFiles: uploadedFiles.map(function(f) { return { name: f.name, size: f.size, type: f.type }; }),
+    attachedCount: uploadedFiles.length
   };
 
-  // Try to save to Google Sheets
-  try {
-    const payload = {action: 'writeBrief', brief: briefData};
-    await fetch(SHEETS_URL, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-      redirect: 'follow'
-    });
-  } catch(e) {
-    console.warn('Sheets save failed:', e);
-    // Still show success — data is captured
-  }
+  // Save to Google Sheets
+  fetch(SHEETS_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    body: JSON.stringify({ action: 'writeBrief', brief: briefData })
+  })
+  .then(function() {
+    showSuccess(ref);
+  })
+  .catch(function() {
+    // Still show success — data captured client side
+    showSuccess(ref);
+  });
+}
 
-  // Show success
+function showSuccess(ref) {
   document.getElementById('step-5').classList.remove('active');
-  document.getElementById('success-screen').style.display = 'block';
+  var s = document.getElementById('success-screen');
+  s.style.display = 'block';
   document.getElementById('success-ref').textContent = '📋 Reference: ' + ref;
-  window.scrollTo({top:0,behavior:'smooth'});
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ════════════════════════════════════════════════════════════
